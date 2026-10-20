@@ -1,0 +1,6 @@
+{
+  "name": "TeleShop Connector",
+  "description": "Production-ready mobile merchant dashboard & setup wizard to connect Shopify and WooCommerce stores to Telegram bots and Telegram Mini App storefronts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

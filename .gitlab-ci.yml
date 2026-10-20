@@ -1,0 +1,142 @@
+# ==============================================================================
+# TELESHOP CONNECTOR - GITLAB CI/CD PIPELINE (PRIVATE REPOSITORY)
+# Standalone Laravel Backend + WordPress Plugin + Cloudflare Worker/Pages
+# Maintained & Engineered by Flotraq.com (https://flotraq.com)
+# ==============================================================================
+
+image: node:20-alpine
+
+stages:
+  - test
+  - build
+  - package
+  - deploy_cloudflare
+  - release
+
+variables:
+  CLOUDFLARE_PAGES_PROJECT: "teleshop-wp-demo"
+  WORKER_NAME: "teleshop-connector-edge"
+  PLUGIN_ZIP_NAME: "teleshop-woocommerce-connector-v1.0.0.zip"
+  CUSTOM_DOMAIN: "wpgram.flotraq.com"
+  NODE_ENV: "production"
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - node_modules/
+    - .npm/
+
+# ------------------------------------------------------------------------------
+# Stage 1: Quality Assurance & Linting
+# ------------------------------------------------------------------------------
+lint_and_typecheck:
+  stage: test
+  before_script:
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - echo "Running TypeScript and Code Verification..."
+    - npm run lint
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# ------------------------------------------------------------------------------
+# Stage 2: Build Static Frontend for Cloudflare Pages
+# ------------------------------------------------------------------------------
+build_cloudflare_pages:
+  stage: build
+  before_script:
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - echo "Building Vite React SPA for Cloudflare Pages..."
+    - npm run build
+  artifacts:
+    name: "cloudflare-pages-dist"
+    expire_in: 7 days
+    paths:
+      - dist/
+
+# ------------------------------------------------------------------------------
+# Stage 3: Package WordPress / WooCommerce Companion Plugin Zip
+# ------------------------------------------------------------------------------
+package_wordpress_plugin:
+  stage: package
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache zip
+  script:
+    - echo "Packaging TeleShop WooCommerce Plugin for distribution..."
+    - mkdir -p release/teleshop-connector
+    - cp -r wordpress-plugin/* release/teleshop-connector/
+    - cd release && zip -r ../${PLUGIN_ZIP_NAME} teleshop-connector
+    - cd ..
+    - echo "Plugin zip created: ${PLUGIN_ZIP_NAME}"
+    - sha256sum ${PLUGIN_ZIP_NAME}
+  artifacts:
+    name: "wordpress-plugin-archive"
+    expire_in: 30 days
+    paths:
+      - ${PLUGIN_ZIP_NAME}
+
+# ------------------------------------------------------------------------------
+# Stage 4: Deploy to Cloudflare Pages & Cloudflare Worker
+# ------------------------------------------------------------------------------
+deploy_to_cloudflare_pages:
+  stage: deploy_cloudflare
+  dependencies:
+    - build_cloudflare_pages
+  before_script:
+    - npm install -g wrangler
+  script:
+    - echo "Deploying static assets to Cloudflare Pages via Wrangler..."
+    - npx wrangler pages deploy dist --project-name=${CLOUDFLARE_PAGES_PROJECT} --branch=${CI_COMMIT_REF_NAME}
+    - npx wrangler pages domain set ${CLOUDFLARE_PAGES_PROJECT} ${CUSTOM_DOMAIN} || true
+  environment:
+    name: cloudflare-pages
+    url: https://${CUSTOM_DOMAIN}
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+deploy_to_cloudflare_worker:
+  stage: deploy_cloudflare
+  before_script:
+    - npm install -g wrangler
+  script:
+    - echo "Deploying edge gateway to Cloudflare Workers with custom domain ${CUSTOM_DOMAIN}..."
+    - npx wrangler deploy --name ${WORKER_NAME}
+  environment:
+    name: cloudflare-worker
+    url: https://${CUSTOM_DOMAIN}
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# ------------------------------------------------------------------------------
+# Stage 5: GitLab Release & Asset Publishing
+# ------------------------------------------------------------------------------
+publish_gitlab_release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  dependencies:
+    - package_wordpress_plugin
+  script:
+    - echo "Publishing TeleShop Connector Release on GitLab by Flotraq.com..."
+  release:
+    name: 'TeleShop Connector Release $CI_COMMIT_SHORT_SHA'
+    description: |
+      ## TeleShop Connector Release
+      **Architected by Flotraq.com** (https://flotraq.com)
+      
+      - Laravel 11 Standalone Core
+      - WordPress / WooCommerce Companion Plugin
+      - Cloudflare Worker & Pages Edge Deployment
+      - Telegram Mini App & Stripe Connect Marketplace
+    tag_name: 'v1.0.0-$CI_COMMIT_SHORT_SHA'
+    ref: '$CI_COMMIT_SHA'
+    assets:
+      links:
+        - name: 'Download WordPress Plugin Zip'
+          url: '${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/teleshop-plugin/v1.0.0/${PLUGIN_ZIP_NAME}'
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual

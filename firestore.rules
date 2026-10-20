@@ -1,0 +1,164 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // TeleShop Connector - Production Firestore Security Rules
+    // Enforces strict tenant isolation, server-only credential security (AES-256),
+    // and role-based access control (Owner, Staff, Viewer).
+    // =========================================================================
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Tenant check: verifies if authenticated user belongs to tenant or has custom claims
+    function isTenantUser(tenantId) {
+      return isAuthenticated() && (
+        request.auth.token.tenantId == tenantId ||
+        request.auth.uid == tenantId ||
+        request.auth.token.admin == true
+      );
+    }
+
+    // Role checks via custom claims
+    function isTenantOwner(tenantId) {
+      return isTenantUser(tenantId) && (
+        request.auth.token.role == 'owner' ||
+        request.auth.uid == tenantId ||
+        request.auth.token.admin == true
+      );
+    }
+
+    function isTenantStaff(tenantId) {
+      return isTenantUser(tenantId) && (
+        request.auth.token.role == 'owner' ||
+        request.auth.token.role == 'staff' ||
+        request.auth.uid == tenantId ||
+        request.auth.token.admin == true
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // Root Tenants Collection
+    // -------------------------------------------------------------------------
+    match /tenants/{tenantId} {
+      // Allow read for tenant members
+      allow read: if isTenantUser(tenantId);
+      // Only owner can create or update top-level tenant settings
+      allow create, update: if isTenantOwner(tenantId);
+      allow delete: if false; // Deletions handled through secure GDPR Cloud Function
+
+      // -----------------------------------------------------------------------
+      // Subcollection: credentials/private
+      // STRICT REQUIREMENT: Server-only! Deny all client SDK access.
+      // E-commerce API keys, Shopify tokens, WooCommerce secrets, Bot tokens.
+      // -----------------------------------------------------------------------
+      match /credentials/{document=**} {
+        allow read, write: if false;
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: features (Feature toggles configured in Wizard & Dashboard)
+      // -----------------------------------------------------------------------
+      match /features/{featureId} {
+        allow read: if isTenantUser(tenantId);
+        allow write: if isTenantStaff(tenantId);
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: customers
+      // Tenant-scoped customer profile, loyalty points, referral code, saved addresses
+      // -----------------------------------------------------------------------
+      match /customers/{customerId} {
+        allow read: if isTenantUser(tenantId);
+        allow write: if isTenantStaff(tenantId);
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: carts (Active and abandoned carts for recovery)
+      // -----------------------------------------------------------------------
+      match /carts/{cartId} {
+        allow read: if isTenantUser(tenantId);
+        allow write: if isTenantStaff(tenantId);
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: orders_cache (Cached orders synced from platform webhooks)
+      // -----------------------------------------------------------------------
+      match /orders_cache/{orderId} {
+        allow read: if isTenantUser(tenantId);
+        // Only written by Cloud Functions webhook listeners via Admin SDK
+        allow write: if false;
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: events (Audit logs, webhook deliveries, alert triggers)
+      // -----------------------------------------------------------------------
+      match /events/{eventId} {
+        allow read: if isTenantUser(tenantId);
+        allow write: if false; // Server-authoritative append-only
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: broadcasts (Marketing broadcasts & scheduled messages)
+      // -----------------------------------------------------------------------
+      match /broadcasts/{broadcastId} {
+        allow read: if isTenantUser(tenantId);
+        allow write: if isTenantStaff(tenantId);
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: faqs (Merchant configurable FAQ Q&A pairs)
+      // -----------------------------------------------------------------------
+      match /faqs/{faqId} {
+        allow read: if isTenantUser(tenantId);
+        allow write: if isTenantStaff(tenantId);
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: support_tickets (Escalations to merchant group)
+      // -----------------------------------------------------------------------
+      match /support_tickets/{ticketId} {
+        allow read: if isTenantUser(tenantId);
+        allow write: if isTenantStaff(tenantId);
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: reviews (Post-delivery 1-5 rating feedback)
+      // -----------------------------------------------------------------------
+      match /reviews/{reviewId} {
+        allow read: if isTenantUser(tenantId);
+        allow write: if false; // Submitted via Telegram webhook
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Root Collection: telegram_bots
+    // Maps Telegram bot tokens hash or bot ID to tenant ID.
+    // Server-only access via Admin SDK.
+    // -------------------------------------------------------------------------
+    match /telegram_bots/{botId} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Root Collection: platform_webhooks
+    // Webhook routing registry and idempotency tracking.
+    // Server-only access via Admin SDK.
+    // -------------------------------------------------------------------------
+    match /platform_webhooks/{webhookId} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Root Collection: dead_letter_queue
+    // Failed webhook events awaiting exponential backoff retries.
+    // Server-only access.
+    // -------------------------------------------------------------------------
+    match /dead_letter_queue/{queueId} {
+      allow read, write: if false;
+    }
+  }
+}

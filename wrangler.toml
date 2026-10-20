@@ -1,0 +1,36 @@
+# ==============================================================================
+# TELESHOP CONNECTOR - CLOUDFLARE WORKER & PAGES DEPLOYMENT CONFIG
+# Architected by Flotraq.com
+# Target Custom Domain: wpgram.flotraq.com
+# ==============================================================================
+
+name = "teleshop-connector-edge"
+main = "worker/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Cloudflare Pages & Static Assets Output Directory
+pages_build_output_dir = "dist"
+
+[assets]
+directory = "dist"
+
+[vars]
+ENVIRONMENT = "production"
+CUSTOM_DOMAIN = "wpgram.flotraq.com"
+WORDPRESS_STORE_URL = "https://demo-woocommerce.flotraq.dev"
+LARAVEL_API_URL = "https://teleshop-api.flotraq.dev"
+AUTHOR = "Flotraq.com"
+
+# Custom domain & route bindings (wpgram.flotraq.com)
+routes = [
+  { pattern = "wpgram.flotraq.com/*", zone_name = "flotraq.com" },
+  { pattern = "wpgram.flotraq.com", custom_domain = true }
+]
+
+# Production environment custom domain configuration
+[env.production]
+routes = [
+  { pattern = "wpgram.flotraq.com/*", zone_name = "flotraq.com" },
+  { pattern = "wpgram.flotraq.com", custom_domain = true }
+]
